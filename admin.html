@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NagpurViralTech — Admin Panel</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK (modules) -->
+<script type="module">
+import { initializeApp }    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, addDoc, getDocs, getDoc,
+  updateDoc, deleteDoc, doc, onSnapshot,
+  query, orderBy, serverTimestamp, increment, setDoc
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getAuth, signInWithEmailAndPassword,
+  signOut, onAuthStateChanged, createUserWithEmailAndPassword
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// ──────────────────────────────────────────────────────────
+// BOOTSTRAP
+// ──────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+
+  const cfg = window.FIREBASE_CONFIG || null;
+  let db = null, auth = null, useLocal = true;
+
+  if (cfg && cfg.apiKey !== "YOUR_API_KEY") {
+    try {
+      const app = initializeApp(cfg);
+      db   = getFirestore(app);
+      auth = getAuth(app);
+      useLocal = false;
+    } catch(e) {
+      console.warn("Firebase init failed:", e.message);
+      useLocal = true;
+    }
+  }
+
+  // ── GLOBAL STATE ──
+  let deals   = [];
+  let editingId = null;
+  let selectedEmoji = '📱';
+  window._nvt = { db, auth, useLocal };
+
+  // ──────────────────────────────────────────────────────
+  // AUTH
+  // ──────────────────────────────────────────────────────
+  function tryLocalLogin(user, pass) {
+    const AU = window.ADMIN_USER     || 'admin';
+    const AP = window.ADMIN_PASSWORD || 'nagpur123';
+    return user === AU && pass === AP;
+  }
+
+  window.doLogin = async () => {
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value.trim();
+    const err = document.getElementById('login-error');
+
+    if (!u || !p) { showErr('Please enter credentials.'); return; }
+
+    if (useLocal) {
+      if (tryLocalLogin(u, p)) { onLoginSuccess(); }
+      else showErr('Incorrect credentials.');
+      return;
+    }
+
+    // Firebase Auth — email = user + "@nagpurviraltech.com"
+    const email = u.includes('@') ? u : u + '@nagpurviraltech.com';
+    try {
+      await signInWithEmailAndPassword(auth, email, p);
+      // onAuthStateChanged will call onLoginSuccess
+    } catch(e) {
+      // Fallback to local check
+      if (tryLocalLogin(u, p)) { onLoginSuccess(); return; }
+      showErr('Incorrect credentials.');
+    }
+  };
+
+  if (auth) {
+    onAuthStateChanged(auth, user => {
+      if (user) onLoginSuccess();
+    });
+  }
+
+  function showErr(msg) {
+    const el = document.getElementById('login-error');
+    el.textContent = '⚠ ' + msg;
+    el.classList.add('show');
+    document.getElementById('login-pass').value = '';
+  }
+
+  function onLoginSuccess() {
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('app').classList.add('visible');
+    initApp();
+  }
+
+  window.doLogout = async () => {
+    if (auth) try { await signOut(auth); } catch(_){}
+    document.getElementById('app').classList.remove('visible');
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('login-user').value = '';
+    document.getElementById('login-pass').value = '';
+    document.getElementById('login-error').classList.remove('show');
+  };
+
+  // ──────────────────────────────────────────────────────
+  // APP INIT
+  // ──────────────────────────────────────────────────────
+  function initApp() {
+    initCharts();
+    if (useLocal || !db) {
+      deals = (window.SEED_DEALS || []).map((d,i) => ({ ...d, id: 'seed_' + i }));
+      renderDealsGrid();
+      renderDashTable();
+      updateDashStats();
+    } else {
+      // Live Firestore listener
+      const q = query(collection(db, 'deals'), orderBy('createdAt', 'desc'));
+      onSnapshot(q, snap => {
+        deals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (deals.length === 0) seedFirebase();
+        renderDealsGrid();
+        renderDashTable();
+        updateDashStats();
+      });
+    }
+  }
+
+  // Seed DB with default deals if empty
+  async function seedFirebase() {
+    if (!db || !window.SEED_DEALS) return;
+    for (const d of window.SEED_DEALS) {
+      await addDoc(collection(db, 'deals'), { ...d, createdAt: serverTimestamp() });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────
+  // DEALS CRUD
+  // ──────────────────────────────────────────────────────
+  window.openModal = (id) => {
+    editingId = id || null;
+    document.getElementById('modal-title').textContent = id ? 'EDIT DEAL' : 'ADD NEW DEAL';
+    if (id) {
+      const d = deals.find(x => x.id === id);
+      if (!d) return;
+      selectedEmoji = d.emoji || '📱';
+      document.getElementById('modal-name').value    = d.name  || '';
+      document.getElementById('modal-cat').value     = d.cat   || 'Smartphones';
+      document.getElementById('modal-price').value   = d.price || '';
+      document.getElementById('modal-orig').value    = d.orig  || '';
+      document.getElementById('modal-desc').value    = d.desc  || '';
+      document.getElementById('modal-badge').value   = d.badge || '';
+      document.getElementById('modal-link').value    = d.link  || '';
+      document.getElementById('modal-status').value  = d.status|| 'Active';
+      document.querySelectorAll('.emoji-opt').forEach(e =>
+        e.classList.toggle('selected', e.dataset.e === d.emoji));
+    } else {
+      selectedEmoji = '📱';
+      ['modal-name','modal-price','modal-orig','modal-desc','modal-badge','modal-link'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('modal-cat').value    = 'Smartphones';
+      document.getElementById('modal-status').value = 'Active';
+      document.querySelectorAll('.emoji-opt').forEach((e,i) => e.classList.toggle('selected', i===0));
+    }
+    document.getElementById('modal-overlay').classList.add('open');
+  };
+
+  window.closeModal = () => document.getElementById('modal-overlay').classList.remove('open');
+  window.closeModalOutside = (e) => { if (e.target.id === 'modal-overlay') window.closeModal(); };
+
+  window.selectEmoji = (el, emoji) => {
+    document.querySelectorAll('.emoji-opt').forEach(e => e.classList.remove('selected'));
+    el.classList.add('selected');
+    selectedEmoji = emoji;
+  };
+
+  window.saveDeal = async () => {
+    const name = document.getElementById('modal-name').value.trim();
+    if (!name) { showToast('Enter a product name!', true); return; }
+    const data = {
+      emoji:  selectedEmoji,
+      name,
+      cat:    document.getElementById('modal-cat').value,
+      price:  parseFloat(document.getElementById('modal-price').value) || 0,
+      orig:   parseFloat(document.getElementById('modal-orig').value)  || 0,
+      desc:   document.getElementById('modal-desc').value,
+      badge:  document.getElementById('modal-badge').value || 'DEAL',
+      link:   document.getElementById('modal-link').value  || '#',
+      status: document.getElementById('modal-status').value,
+    };
+
+    if (useLocal || !db) {
+      if (editingId) {
+        const idx = deals.findIndex(x => x.id === editingId);
+        deals[idx] = { ...deals[idx], ...data };
+      } else {
+        data.id = 'local_' + Date.now(); data.clicks = 0; data.createdAt = Date.now();
+        deals.unshift(data);
+      }
+      renderDealsGrid(); renderDashTable(); updateDashStats();
+      showToast(editingId ? 'Deal updated!' : 'Deal added!');
+    } else {
+      try {
+        if (editingId) {
+          await updateDoc(doc(db, 'deals', editingId), data);
+          showToast('Deal updated!');
+        } else {
+          data.clicks = 0; data.createdAt = serverTimestamp();
+          await addDoc(collection(db, 'deals'), data);
+          showToast('Deal added! Live on your website instantly.');
+        }
+      } catch(e) { showToast('Error: ' + e.message, true); return; }
+    }
+    window.closeModal();
+  };
+
+  window.editDeal   = (id) => window.openModal(id);
+  window.deleteDeal = async (id) => {
+    if (!confirm('Delete this deal? This cannot be undone.')) return;
+    if (useLocal || !db) {
+      deals = deals.filter(d => d.id !== id);
+    } else {
+      try { await deleteDoc(doc(db, 'deals', id)); } catch(e) { showToast('Error: ' + e.message, true); return; }
+    }
+    renderDealsGrid(); renderDashTable(); updateDashStats();
+    showToast('Deal deleted.', true);
+  };
+
+  window.toggleStatus = async (id) => {
+    const d = deals.find(x => x.id === id);
+    if (!d) return;
+    const newStatus = d.status === 'Active' ? 'Inactive' : 'Active';
+    if (useLocal || !db) {
+      d.status = newStatus;
+    } else {
+      try { await updateDoc(doc(db, 'deals', id), { status: newStatus }); } catch(_){}
+    }
+    renderDealsGrid(); renderDashTable(); updateDashStats();
+    showToast('Status changed to ' + newStatus);
+  };
+
+  // ──────────────────────────────────────────────────────
+  // RENDER
+  // ──────────────────────────────────────────────────────
+  function disc(p, o) { return o > p ? Math.round((1 - p/o) * 100) : 0; }
+
+  function renderDealsGrid(list) {
+    const grid = document.getElementById('deals-grid');
+    const data = list || deals;
+    if (!data.length) {
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--muted);font-family:'DM Mono',monospace;font-size:.75rem;letter-spacing:2px;">NO DEALS YET — ADD YOUR FIRST DEAL ABOVE</div>`;
+      return;
+    }
+    grid.innerHTML = data.map(d => `
+      <div class="deal-admin-card">
+        <div class="deal-admin-header">
+          <div class="deal-emoji-box">${d.emoji||'🛍️'}</div>
+          <div style="flex:1;min-width:0">
+            <div class="deal-admin-name">${d.name}</div>
+            <div class="deal-admin-cat">${d.cat}</div>
+          </div>
+          <span class="chip ${d.status==='Active'?'chip-green':d.status==='Expired'?'chip-red':'chip-orange'}"
+                style="cursor:pointer" onclick="toggleStatus('${d.id}')" title="Click to toggle">
+            ${d.status}
+          </span>
+        </div>
+        <div class="deal-admin-body">
+          <div class="deal-admin-row">
+            <div><div class="deal-admin-price">₹${Number(d.price).toLocaleString()}</div>
+              <div class="deal-admin-orig">₹${Number(d.orig).toLocaleString()}</div></div>
+            <div style="text-align:right">
+              <span class="chip chip-orange" style="font-size:.58rem">${disc(d.price,d.orig)}% OFF</span>
+              <div class="deal-admin-clicks">${(d.clicks||0).toLocaleString()} clicks</div>
+            </div>
+          </div>
+          <p style="font-size:.78rem;color:var(--muted);margin-bottom:14px;line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${d.desc||''}</p>
+          <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+            <span class="chip chip-blue" style="font-size:.58rem">${d.badge||'DEAL'}</span>
+            ${d.link && d.link!=='#' ? `<span class="chip chip-green" style="font-size:.58rem">✓ Link set</span>` : `<span class="chip chip-red" style="font-size:.58rem">⚠ No link</span>`}
+          </div>
+          <div class="deal-admin-actions">
+            <button class="btn-edit-deal" onclick="editDeal('${d.id}')">✏ Edit</button>
+            <button class="btn-view-deal" onclick="window.open('${d.link||'#'}','_blank')">↗ View</button>
+            <button class="btn-del-deal" onclick="deleteDeal('${d.id}')">✕</button>
+          </div>
+        </div>
+      </div>`).join('');
+  }
+
+  function renderDashTable() {
+    const tb = document.getElementById('dash-deals-table');
+    if (!tb) return;
+    tb.innerHTML = deals.slice(0,5).map(d => `
+      <tr>
+        <td><div class="deal-thumb-wrap"><div class="deal-thumb">${d.emoji||'🛍️'}</div>
+          <div><div class="deal-cell-name">${d.name}</div><div class="deal-cell-cat">${d.cat}</div></div></div></td>
+        <td style="color:var(--orange);font-weight:700;">₹${Number(d.price).toLocaleString()}</td>
+        <td><span class="chip chip-green">${disc(d.price,d.orig)}% off</span></td>
+        <td><span class="chip ${d.status==='Active'?'chip-green':'chip-orange'}">${d.status}</span></td>
+        <td><button class="action-btn" onclick="editDeal('${d.id}');showPage('deals',document.querySelectorAll('.nav-item')[1])">Edit</button>
+            <button class="action-btn del" onclick="deleteDeal('${d.id}')">Del</button></td>
+      </tr>`).join('');
+  }
+
+  function updateDashStats() {
+    const active = deals.filter(d => d.status === 'Active').length;
+    const clicks = deals.reduce((s,d) => s + (d.clicks||0), 0);
+    const est    = Math.round(clicks * 1.6); // rough ₹ estimate
+
+    const el = id => document.getElementById(id);
+    if (el('dash-total-deals'))   el('dash-total-deals').textContent   = deals.length;
+    if (el('dash-active-deals'))  el('dash-active-deals').textContent  = active;
+    if (el('dash-total-clicks'))  el('dash-total-clicks').textContent  = clicks >= 1000 ? (clicks/1000).toFixed(1)+'K' : clicks;
+    if (el('dash-commission'))    el('dash-commission').textContent    = '₹' + (est >= 1000 ? (est/1000).toFixed(1)+'K' : est);
+    if (el('dash-badge'))         el('dash-badge').textContent         = deals.length;
+  }
+
+  // ──────────────────────────────────────────────────────
+  // FILTER
+  // ──────────────────────────────────────────────────────
+  window.filterDeals = () => {
+    const q = (document.getElementById('deal-search').value || '').toLowerCase();
+    const f = document.getElementById('deal-filter').value;
+    const filtered = deals.filter(d =>
+      (!q || d.name.toLowerCase().includes(q) || (d.cat||'').toLowerCase().includes(q)) &&
+      (!f || d.cat === f));
+    renderDealsGrid(filtered);
+  };
+
+  // ──────────────────────────────────────────────────────
+  // CHARTS
+  // ──────────────────────────────────────────────────────
+  function initCharts() {
+    const days = ['M','T','W','T','F','S','S'];
+    const vals = [42,68,55,90,74,120,96];
+    const max  = Math.max(...vals);
+    const chart  = document.getElementById('weekly-chart');
+    const labels = document.getElementById('weekly-labels');
+    if (chart) {
+      chart.innerHTML = '';
+      if(labels) labels.innerHTML = '';
+      days.forEach((d,i) => {
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.height = (vals[i]/max*100) + '%';
+        bar.title = d + ': ' + vals[i] + ' clicks';
+        chart.appendChild(bar);
+        if (labels) {
+          const lbl = document.createElement('div');
+          lbl.className = 'chart-label';
+          lbl.textContent = d;
+          labels.appendChild(lbl);
+        }
+      });
+    }
+    const big = document.getElementById('big-chart');
+    if (big) {
+      const bigData = Array.from({length:30}, (_,i) => Math.floor(40+Math.random()*120+Math.sin(i/3)*30));
+      const bigMax  = Math.max(...bigData);
+      big.innerHTML = '';
+      bigData.forEach((v,i) => {
+        const bar = document.createElement('div');
+        bar.className = 'big-bar';
+        bar.style.height = (v/bigMax*160)+'px';
+        bar.title = 'Day '+(i+1)+': '+v+' clicks';
+        if (i%5===0) { const lbl=document.createElement('div');lbl.className='big-bar-label';lbl.textContent='D'+(i+1);bar.appendChild(lbl); }
+        big.appendChild(bar);
+      });
+    }
+  }
+
+  // ──────────────────────────────────────────────────────
+  // INSTAGRAM POST (local only, no real API)
+  // ──────────────────────────────────────────────────────
+  window.updatePreview = () => {
+    const cap = document.getElementById('post-caption');
+    const prev = document.getElementById('preview-caption');
+    if (cap && prev) prev.textContent = cap.value.slice(0,200);
+  };
+  window.setTab = (btn) => {
+    btn.parentElement.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  };
+  window.addHashtag = (el) => {
+    const cap = document.getElementById('post-caption');
+    if (cap && !cap.value.includes(el.textContent)) {
+      cap.value += '\n' + el.textContent;
+      window.updatePreview();
+      showToast('Hashtag added!');
+    }
+  };
+
+  // ──────────────────────────────────────────────────────
+  // TOAST
+  // ──────────────────────────────────────────────────────
+  let toastTimer;
+  window.showToast = (msg, isError) => {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.textContent = (isError ? '⚠ ' : '✓ ') + msg;
+    t.style.background   = isError ? 'var(--red-dim)'   : 'var(--green-dim)';
+    t.style.color        = isError ? 'var(--red)'       : 'var(--green)';
+    t.style.borderColor  = isError ? 'rgba(255,68,68,.3)' : 'rgba(0,230,118,.3)';
+    t.style.transform = 'translateY(0)'; t.style.opacity = '1';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.style.transform='translateY(80px)';t.style.opacity='0'; }, 3000);
+  };
+
+  // ──────────────────────────────────────────────────────
+  // SETTINGS SAVE
+  // ──────────────────────────────────────────────────────
+  window.saveSettings = async () => {
+    const data = {
+      siteName:   document.getElementById('s-site-name')?.value,
+      tagline:    document.getElementById('s-tagline')?.value,
+      instagram:  document.getElementById('s-instagram')?.value,
+      whatsapp:   document.getElementById('s-whatsapp')?.value,
+    };
+    if (!useLocal && db) {
+      try { await setDoc(doc(db,'settings','main'), data); } catch(_){}
+    }
+    showToast('Settings saved!');
+  };
+
+  window.changePassword = () => showToast('Password updated! (Demo mode — connect Firebase Auth to persist)');
+
+}); // end DOMContentLoaded
+</script>
+
+<script src="firebase-config.js" onerror="console.warn('firebase-config.js not found, using defaults')"></script>
+
+<style>
+:root{--bg:#080c10;--surface:#0e1318;--panel:#121820;--card:#161d26;--card2:#1a2230;--border:#1e2a38;--border2:#253040;--orange:#ff6200;--orange-dim:rgba(255,98,0,.12);--orange-glow:rgba(255,98,0,.25);--yellow:#ffc107;--green:#00e676;--green-dim:rgba(0,230,118,.1);--red:#ff4444;--red-dim:rgba(255,68,68,.1);--blue:#2196f3;--blue-dim:rgba(33,150,243,.1);--white:#e8edf2;--muted:#5a6a7a;--muted2:#3a4a5a;--sidebar-w:260px;--topbar-h:64px;}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--white);font-family:'Outfit',sans-serif;min-height:100vh;overflow-x:hidden;}
+::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:var(--bg);}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:10px;}
+
+/* LOGIN */
+#login-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9000;transition:opacity .5s,visibility .5s;}
+#login-screen.hidden{opacity:0;visibility:hidden;}
+.login-grid-bg{position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:48px 48px;opacity:.25;}
+.login-orb{position:absolute;width:500px;height:500px;background:radial-gradient(circle,rgba(255,98,0,.15) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:breathe 5s ease-in-out infinite;}
+@keyframes breathe{0%,100%{transform:translate(-50%,-50%) scale(1);}50%{transform:translate(-50%,-50%) scale(1.12);}}
+.login-box{position:relative;z-index:2;background:var(--panel);border:1px solid var(--border);padding:48px 44px;width:100%;max-width:420px;box-shadow:0 32px 80px rgba(0,0,0,.6),0 0 60px rgba(255,98,0,.06);animation:fadeUp .7s ease;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(24px);}to{opacity:1;transform:translateY(0);}}
+.login-logo{font-family:'Bebas Neue',sans-serif;font-size:1.9rem;letter-spacing:2px;margin-bottom:6px;}
+.login-logo span{color:var(--orange);}
+.login-sub{font-family:'DM Mono',monospace;font-size:.65rem;color:var(--muted);letter-spacing:3px;text-transform:uppercase;margin-bottom:40px;padding-bottom:32px;border-bottom:1px solid var(--border);}
+.form-group{margin-bottom:20px;}
+.form-label{display:block;font-family:'DM Mono',monospace;font-size:.62rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+.form-input{width:100%;background:var(--card);border:1px solid var(--border);color:var(--white);padding:13px 16px;font-family:'Outfit',sans-serif;font-size:.9rem;outline:none;transition:border-color .2s,box-shadow .2s;}
+.form-input:focus{border-color:var(--orange);box-shadow:0 0 0 3px var(--orange-dim);}
+.form-input::placeholder{color:var(--muted2);}
+.login-hint{font-family:'DM Mono',monospace;font-size:.6rem;color:var(--muted2);text-align:center;margin-top:12px;letter-spacing:1px;}
+.login-hint span{color:var(--orange);}
+.btn-login{width:100%;background:var(--orange);color:#000;border:none;padding:14px;font-family:'DM Mono',monospace;font-size:.78rem;font-weight:500;letter-spacing:2px;text-transform:uppercase;cursor:pointer;margin-top:8px;transition:background .2s,transform .15s,box-shadow .2s;}
+.btn-login:hover{background:#ff8c00;transform:translateY(-1px);box-shadow:0 8px 28px rgba(255,98,0,.35);}
+.login-error{background:var(--red-dim);border:1px solid rgba(255,68,68,.3);color:var(--red);font-family:'DM Mono',monospace;font-size:.7rem;padding:10px 14px;margin-bottom:16px;display:none;letter-spacing:1px;}
+.login-error.show{display:block;}
+
+/* LAYOUT */
+#app{display:none;min-height:100vh;}
+#app.visible{display:flex;}
+.sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);position:fixed;top:0;left:0;bottom:0;display:flex;flex-direction:column;z-index:200;}
+.sidebar-header{padding:22px 24px;border-bottom:1px solid var(--border);}
+.sidebar-logo{font-family:'Bebas Neue',sans-serif;font-size:1.5rem;letter-spacing:2px;}
+.sidebar-logo span{color:var(--orange);}
+.sidebar-tagline{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:3px;}
+.sidebar-nav{flex:1;padding:20px 12px;overflow-y:auto;}
+.nav-section-label{font-family:'DM Mono',monospace;font-size:.55rem;color:var(--muted2);letter-spacing:3px;text-transform:uppercase;padding:0 12px;margin:20px 0 8px;}
+.nav-section-label:first-child{margin-top:0;}
+.nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;color:var(--muted);text-decoration:none;font-size:.88rem;font-weight:500;border-radius:6px;cursor:pointer;transition:background .18s,color .18s;position:relative;margin-bottom:2px;border:none;background:none;width:100%;text-align:left;}
+.nav-item:hover{background:var(--card);color:var(--white);}
+.nav-item.active{background:var(--orange-dim);color:var(--orange);border-left:2px solid var(--orange);padding-left:10px;}
+.nav-icon{font-size:1rem;width:20px;text-align:center;flex-shrink:0;}
+.nav-badge{margin-left:auto;background:var(--orange);color:#000;font-family:'DM Mono',monospace;font-size:.58rem;font-weight:500;padding:2px 7px;border-radius:10px;}
+.sidebar-footer{padding:16px 12px;border-top:1px solid var(--border);}
+.admin-pill{display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--card);border-radius:6px;}
+.admin-avatar{width:32px;height:32px;background:var(--orange);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:1rem;color:#000;flex-shrink:0;}
+.admin-name{font-size:.82rem;font-weight:600;}
+.admin-role{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--orange);letter-spacing:1px;}
+.logout-btn{margin-left:auto;background:none;border:none;color:var(--muted);font-size:1rem;cursor:pointer;transition:color .2s;}
+.logout-btn:hover{color:var(--red);}
+.main{margin-left:var(--sidebar-w);flex:1;display:flex;flex-direction:column;min-height:100vh;}
+.topbar{height:var(--topbar-h);background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:0 32px;}
+.page-title{font-family:'Bebas Neue',sans-serif;font-size:1.5rem;letter-spacing:1.5px;}
+.page-breadcrumb{font-family:'DM Mono',monospace;font-size:.62rem;color:var(--muted);letter-spacing:1.5px;}
+.topbar-right{display:flex;align-items:center;gap:16px;}
+.topbar-btn{background:var(--card);border:1px solid var(--border);color:var(--muted);width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:1rem;cursor:pointer;transition:border-color .2s,color .2s;border-radius:6px;}
+.topbar-btn:hover{border-color:var(--orange);color:var(--orange);}
+.status-chip{display:flex;align-items:center;gap:7px;background:var(--green-dim);border:1px solid rgba(0,230,118,.2);padding:6px 14px;border-radius:20px;font-family:'DM Mono',monospace;font-size:.62rem;color:var(--green);letter-spacing:1px;}
+.status-dot{width:6px;height:6px;background:var(--green);border-radius:50%;animation:blink 1.5s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.3;}}
+.content{padding:32px;flex:1;}
+.page{display:none;}
+.page.active{display:block;animation:fadeUp .4s ease;}
+
+/* STATS */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:28px;}
+.stat-card{background:var(--card);border:1px solid var(--border);padding:24px;position:relative;overflow:hidden;transition:border-color .25s,transform .2s;}
+.stat-card:hover{border-color:var(--border2);transform:translateY(-2px);}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
+.stat-card.orange::before{background:var(--orange);}
+.stat-card.green::before{background:var(--green);}
+.stat-card.blue::before{background:var(--blue);}
+.stat-card.yellow::before{background:var(--yellow);}
+.stat-label2{font-family:'DM Mono',monospace;font-size:.6rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:12px;}
+.stat-value{font-family:'Bebas Neue',sans-serif;font-size:2.6rem;line-height:1;margin-bottom:8px;}
+.stat-card.orange .stat-value{color:var(--orange);}
+.stat-card.green  .stat-value{color:var(--green);}
+.stat-card.blue   .stat-value{color:var(--blue);}
+.stat-card.yellow .stat-value{color:var(--yellow);}
+.stat-trend{font-size:.78rem;display:flex;align-items:center;gap:5px;}
+.trend-up{color:var(--green);}
+.stat-icon-bg{position:absolute;right:16px;bottom:12px;font-size:2.5rem;opacity:.07;}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;}
+.grid-3{display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:24px;}
+.panel{background:var(--card);border:1px solid var(--border);}
+.panel-header{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+.panel-title{font-size:.88rem;font-weight:700;display:flex;align-items:center;gap:10px;}
+.panel-title-dot{width:8px;height:8px;background:var(--orange);border-radius:50%;}
+.panel-action{font-family:'DM Mono',monospace;font-size:.62rem;color:var(--orange);letter-spacing:1px;cursor:pointer;background:none;border:none;transition:opacity .2s;}
+.panel-action:hover{opacity:.7;}
+.panel-body{padding:20px 24px;}
+.mini-chart{display:flex;align-items:flex-end;gap:6px;height:80px;padding:10px 0;}
+.bar{flex:1;background:var(--orange-dim);border-top:2px solid var(--orange);min-height:8px;}
+.chart-labels{display:flex;gap:6px;}
+.chart-label{flex:1;text-align:center;font-family:'DM Mono',monospace;font-size:.55rem;color:var(--muted);}
+.data-table{width:100%;border-collapse:collapse;}
+.data-table th{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;text-align:left;padding:0 12px 12px;border-bottom:1px solid var(--border);}
+.data-table td{padding:12px;font-size:.83rem;border-bottom:1px solid var(--border);vertical-align:middle;}
+.data-table tr:last-child td{border-bottom:none;}
+.data-table tr:hover td{background:var(--card2);}
+.deal-thumb{width:36px;height:36px;background:var(--panel);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;border:1px solid var(--border);}
+.deal-thumb-wrap{display:flex;align-items:center;gap:12px;}
+.deal-cell-name{font-weight:600;font-size:.85rem;}
+.deal-cell-cat{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted);letter-spacing:1px;}
+.chip{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:1px;font-weight:500;}
+.chip-green{background:var(--green-dim);color:var(--green);border:1px solid rgba(0,230,118,.2);}
+.chip-orange{background:var(--orange-dim);color:var(--orange);border:1px solid rgba(255,98,0,.2);}
+.chip-red{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,68,68,.2);}
+.chip-blue{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(33,150,243,.2);}
+.chip-yellow{background:rgba(255,193,7,.1);color:var(--yellow);border:1px solid rgba(255,193,7,.2);}
+.action-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 10px;font-size:.7rem;cursor:pointer;border-radius:4px;margin-right:4px;transition:all .2s;}
+.action-btn:hover{border-color:var(--orange);color:var(--orange);}
+.action-btn.del:hover{border-color:var(--red);color:var(--red);}
+.cat-list{display:flex;flex-direction:column;gap:14px;}
+.cat-item-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;}
+.cat-name{font-size:.82rem;font-weight:500;}
+.cat-pct{font-family:'DM Mono',monospace;font-size:.65rem;color:var(--muted);}
+.cat-bar-track{height:4px;background:var(--border2);border-radius:2px;overflow:hidden;}
+.cat-bar-fill{height:100%;border-radius:2px;background:var(--orange);}
+.activity-list{display:flex;flex-direction:column;}
+.activity-item{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid var(--border);}
+.activity-item:last-child{border-bottom:none;}
+.activity-dot{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0;margin-top:2px;}
+.activity-dot.a-orange{background:var(--orange-dim);}
+.activity-dot.a-green{background:var(--green-dim);}
+.activity-dot.a-blue{background:var(--blue-dim);}
+.activity-dot.a-red{background:var(--red-dim);}
+.activity-text{font-size:.82rem;line-height:1.5;flex:1;}
+.activity-text strong{color:var(--white);}
+.activity-text span{color:var(--muted);}
+.activity-time{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted2);letter-spacing:1px;flex-shrink:0;margin-top:4px;}
+
+/* DEALS PAGE */
+.page-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:24px;}
+.toolbar-left{display:flex;gap:12px;flex-wrap:wrap;}
+.search-box{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--border);padding:9px 16px;min-width:240px;}
+.search-box input{background:none;border:none;color:var(--white);font-family:'Outfit',sans-serif;font-size:.85rem;outline:none;flex:1;}
+.search-box input::placeholder{color:var(--muted2);}
+.filter-select{background:var(--card);border:1px solid var(--border);color:var(--white);padding:9px 16px;font-family:'Outfit',sans-serif;font-size:.82rem;outline:none;cursor:pointer;}
+.btn-add{background:var(--orange);color:#000;border:none;padding:10px 22px;font-family:'DM Mono',monospace;font-size:.72rem;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;transition:background .2s,transform .15s;display:flex;align-items:center;gap:8px;}
+.btn-add:hover{background:#ff8c00;transform:translateY(-1px);}
+.btn-secondary{background:var(--card);color:var(--white);border:1px solid var(--border);padding:10px 18px;font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:1px;cursor:pointer;transition:border-color .2s,color .2s;}
+.btn-secondary:hover{border-color:var(--orange);color:var(--orange);}
+.deals-admin-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;}
+.deal-admin-card{background:var(--card);border:1px solid var(--border);overflow:hidden;transition:border-color .2s,transform .2s;}
+.deal-admin-card:hover{border-color:var(--border2);transform:translateY(-2px);}
+.deal-admin-header{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;}
+.deal-emoji-box{width:44px;height:44px;background:var(--panel);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;border:1px solid var(--border);flex-shrink:0;}
+.deal-admin-name{font-weight:700;font-size:.88rem;margin-bottom:3px;}
+.deal-admin-cat{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;}
+.deal-admin-body{padding:14px 16px;}
+.deal-admin-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.deal-admin-price{font-family:'Bebas Neue',sans-serif;font-size:1.6rem;color:var(--orange);line-height:1;}
+.deal-admin-orig{font-size:.78rem;color:var(--muted);text-decoration:line-through;}
+.deal-admin-clicks{font-family:'DM Mono',monospace;font-size:.65rem;color:var(--muted);letter-spacing:1px;}
+.deal-admin-actions{display:flex;gap:8px;margin-top:14px;}
+.deal-admin-actions button{flex:1;padding:8px;font-family:'DM Mono',monospace;font-size:.62rem;letter-spacing:1px;cursor:pointer;border-radius:4px;transition:all .2s;}
+.btn-edit-deal{background:var(--orange-dim);border:1px solid rgba(255,98,0,.3);color:var(--orange);}
+.btn-edit-deal:hover{background:var(--orange);color:#000;}
+.btn-del-deal{background:var(--red-dim);border:1px solid rgba(255,68,68,.3);color:var(--red);}
+.btn-del-deal:hover{background:var(--red);color:#fff;}
+.btn-view-deal{background:var(--card2);border:1px solid var(--border2);color:var(--muted);}
+.btn-view-deal:hover{color:var(--white);}
+
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);backdrop-filter:blur(4px);z-index:500;display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;visibility:hidden;transition:opacity .3s,visibility .3s;}
+.modal-overlay.open{opacity:1;visibility:visible;}
+.modal{background:var(--panel);border:1px solid var(--border);width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 32px 80px rgba(0,0,0,.7);transform:translateY(20px);transition:transform .3s;}
+.modal-overlay.open .modal{transform:translateY(0);}
+.modal-header{padding:22px 28px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--panel);}
+.modal-title{font-family:'Bebas Neue',sans-serif;font-size:1.4rem;letter-spacing:1.5px;}
+.modal-close{background:var(--card);border:1px solid var(--border);color:var(--muted);width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:1rem;transition:all .2s;}
+.modal-close:hover{border-color:var(--red);color:var(--red);}
+.modal-body{padding:28px;}
+.modal-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.modal-footer{padding:20px 28px;border-top:1px solid var(--border);display:flex;gap:12px;justify-content:flex-end;}
+.emoji-picker{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:8px;}
+.emoji-opt{background:var(--card2);border:1px solid var(--border2);width:100%;aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:1.3rem;cursor:pointer;transition:border-color .2s,background .2s;border-radius:6px;}
+.emoji-opt:hover,.emoji-opt.selected{border-color:var(--orange);background:var(--orange-dim);}
+textarea.form-input{resize:vertical;min-height:80px;line-height:1.6;}
+
+/* INSTAGRAM */
+.insta-page-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+.post-type-tabs{display:flex;gap:0;border:1px solid var(--border);margin-bottom:20px;}
+.tab-btn{flex:1;padding:9px;background:none;border:none;color:var(--muted);font-family:'DM Mono',monospace;font-size:.65rem;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;transition:all .2s;border-right:1px solid var(--border);}
+.tab-btn:last-child{border-right:none;}
+.tab-btn.active{background:var(--orange-dim);color:var(--orange);}
+.tab-btn:hover:not(.active){color:var(--white);background:var(--card2);}
+.hashtag-box{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+.hashtag{background:var(--orange-dim);color:var(--orange);border:1px solid rgba(255,98,0,.25);font-family:'DM Mono',monospace;font-size:.62rem;padding:4px 10px;border-radius:20px;cursor:pointer;}
+.phone-mockup{width:200px;height:380px;margin:0 auto;background:var(--panel);border:1.5px solid var(--border2);border-radius:28px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;}
+.phone-top{height:20px;background:var(--bg);border-radius:28px 28px 0 0;display:flex;align-items:center;justify-content:center;}
+.phone-notch-bar{width:60px;height:8px;background:var(--card2);border-radius:4px;}
+.phone-screen{flex:1;padding:10px;overflow:hidden;}
+.insta-header-mock{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.insta-avatar{width:24px;height:24px;background:var(--orange);border-radius:50%;flex-shrink:0;}
+.insta-user{font-size:.6rem;font-weight:700;}
+.insta-time{font-size:.5rem;color:var(--muted);}
+.insta-img-mock{width:100%;height:100px;background:linear-gradient(135deg,#1a0a00,#2a1400);border-radius:6px;margin-bottom:6px;display:flex;align-items:center;justify-content:center;font-size:2.5rem;}
+.insta-caption{font-size:.55rem;color:var(--muted);line-height:1.5;}
+
+/* ANALYTICS */
+.big-chart{display:flex;align-items:flex-end;gap:8px;height:180px;padding:16px 0 0;}
+.big-bar{flex:1;background:var(--orange-dim);border-top:2px solid var(--orange);min-height:10px;cursor:pointer;transition:background .2s;position:relative;}
+.big-bar:hover{background:rgba(255,98,0,.25);}
+.big-bar-label{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-family:'DM Mono',monospace;font-size:.55rem;color:var(--muted);white-space:nowrap;}
+.analytics-row{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;}
+.analytics-mini-card{background:var(--card);border:1px solid var(--border);padding:20px;}
+.analytics-mini-label{font-family:'DM Mono',monospace;font-size:.58rem;color:var(--muted);letter-spacing:2px;margin-bottom:10px;}
+.analytics-mini-val{font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--white);line-height:1;}
+.analytics-mini-sub{font-size:.72rem;color:var(--muted);margin-top:4px;}
+
+/* SETTINGS */
+.settings-grid{display:grid;grid-template-columns:220px 1fr;gap:24px;}
+.settings-nav{background:var(--card);border:1px solid var(--border);overflow:hidden;}
+.settings-nav-item{display:flex;align-items:center;gap:12px;padding:13px 18px;color:var(--muted);font-size:.83rem;cursor:pointer;border-bottom:1px solid var(--border);transition:all .2s;}
+.settings-nav-item:last-child{border-bottom:none;}
+.settings-nav-item:hover,.settings-nav-item.active{background:var(--orange-dim);color:var(--orange);}
+.settings-section{background:var(--card);border:1px solid var(--border);padding:28px;margin-bottom:20px;}
+.settings-section-title{font-family:'Bebas Neue',sans-serif;font-size:1.2rem;letter-spacing:1.5px;margin-bottom:4px;}
+.settings-section-desc{font-size:.8rem;color:var(--muted);margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border);}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);}
+.toggle-row:last-child{border-bottom:none;}
+.toggle-label{font-size:.85rem;font-weight:500;}
+.toggle-desc{font-size:.75rem;color:var(--muted);margin-top:2px;}
+.toggle{position:relative;width:40px;height:22px;flex-shrink:0;}
+.toggle input{opacity:0;width:0;height:0;}
+.toggle-slider{position:absolute;inset:0;background:var(--border2);border-radius:22px;cursor:pointer;transition:background .3s;}
+.toggle-slider::before{content:'';position:absolute;width:16px;height:16px;left:3px;top:3px;background:var(--muted);border-radius:50%;transition:transform .3s,background .3s;}
+.toggle input:checked + .toggle-slider{background:var(--orange);}
+.toggle input:checked + .toggle-slider::before{transform:translateX(18px);background:#000;}
+.form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+.btn-save{background:var(--orange);color:#000;border:none;padding:11px 28px;font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;transition:background .2s;margin-top:8px;}
+.btn-save:hover{background:#ff8c00;}
+
+/* FIREBASE SETUP BANNER */
+.firebase-banner{background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.3);padding:16px 24px;margin-bottom:24px;display:flex;align-items:flex-start;gap:16px;}
+.firebase-banner-icon{font-size:1.5rem;flex-shrink:0;}
+.firebase-banner-text h4{color:var(--yellow);font-size:.85rem;font-weight:700;margin-bottom:6px;}
+.firebase-banner-text p{color:var(--muted);font-size:.78rem;line-height:1.6;}
+.firebase-banner-text code{background:var(--card2);color:var(--orange);padding:2px 6px;font-family:'DM Mono',monospace;font-size:.72rem;border-radius:3px;}
+
+@media(max-width:1100px){.stats-row{grid-template-columns:repeat(2,1fr);}.grid-2,.grid-3,.insta-page-grid{grid-template-columns:1fr;}.settings-grid{grid-template-columns:1fr;}}
+@media(max-width:768px){.sidebar{transform:translateX(-100%);}.main{margin-left:0;}.stats-row{grid-template-columns:1fr 1fr;}.deals-admin-grid{grid-template-columns:1fr;}.modal-row{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-grid-bg"></div>
+  <div class="login-orb"></div>
+  <div class="login-box">
+    <div class="login-logo">Nagpur<span>Viral</span>Tech</div>
+    <div class="login-sub">Admin Control Panel</div>
+    <div class="login-error" id="login-error"></div>
+    <div class="form-group"><label class="form-label">Username</label><input class="form-input" id="login-user" type="text" placeholder="admin" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()"></div>
+    <div class="form-group"><label class="form-label">Password</label><input class="form-input" id="login-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <button class="btn-login" onclick="doLogin()">Sign In →</button>
+    <p class="login-hint">Default: <span>admin</span> / <span>nagpur123</span></p>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">NVT <span>Admin</span></div>
+      <div class="sidebar-tagline">NagpurViralTech</div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">Main</div>
+      <button class="nav-item active" onclick="showPage('dashboard',this)"><span class="nav-icon">📊</span> Dashboard</button>
+      <button class="nav-item" onclick="showPage('deals',this)"><span class="nav-icon">🏷️</span> Manage Deals <span class="nav-badge" id="dash-badge">0</span></button>
+      <button class="nav-item" onclick="showPage('instagram',this)"><span class="nav-icon">📱</span> Instagram Posts</button>
+      <button class="nav-item" onclick="showPage('analytics',this)"><span class="nav-icon">📈</span> Analytics</button>
+      <div class="nav-section-label">Content</div>
+      <button class="nav-item" onclick="showPage('categories',this)"><span class="nav-icon">🗂️</span> Categories</button>
+      <button class="nav-item" onclick="showPage('affiliates',this)"><span class="nav-icon">💰</span> Affiliate Links</button>
+      <div class="nav-section-label">System</div>
+      <button class="nav-item" onclick="showPage('settings',this)"><span class="nav-icon">⚙️</span> Settings</button>
+      <button class="nav-item" onclick="window.open('index.html','_blank')"><span class="nav-icon">🌐</span> View Live Site</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="admin-pill">
+        <div class="admin-avatar">A</div>
+        <div><div class="admin-name">Admin</div><div class="admin-role">Super Admin</div></div>
+        <button class="logout-btn" onclick="doLogout()" title="Logout">⏻</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="page-title" id="page-title">DASHBOARD</div>
+        <div class="page-breadcrumb" id="page-breadcrumb">NAGPURVIRALTECH / DASHBOARD</div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-chip"><div class="status-dot"></div> LIVE</div>
+        <button class="topbar-btn" onclick="window.open('index.html','_blank')" title="View Live Site">🌐</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div id="firebase-notice" style="display:none" class="firebase-banner">
+          <div class="firebase-banner-icon">⚡</div>
+          <div class="firebase-banner-text">
+            <h4>Connect Firebase for Live Backend</h4>
+            <p>Currently running in <strong>local demo mode</strong>. Deals won't sync to the public site until you connect Firebase. Open <code>firebase-config.js</code> and add your Firebase project credentials. <a href="https://console.firebase.google.com" target="_blank" style="color:var(--orange)">Get them here →</a></p>
+          </div>
+        </div>
+        <div class="stats-row">
+          <div class="stat-card orange"><div class="stat-label2">Total Deals</div><div class="stat-value" id="dash-total-deals">0</div><div class="stat-trend trend-up">↑ Active deals</div><div class="stat-icon-bg">🏷️</div></div>
+          <div class="stat-card green"><div class="stat-label2">Total Clicks</div><div class="stat-value" id="dash-total-clicks">0</div><div class="stat-trend trend-up">↑ Affiliate clicks</div><div class="stat-icon-bg">👆</div></div>
+          <div class="stat-card blue"><div class="stat-label2">Est. Commission</div><div class="stat-value" id="dash-commission">₹0</div><div class="stat-trend trend-up">↑ Estimated earned</div><div class="stat-icon-bg">💰</div></div>
+          <div class="stat-card yellow"><div class="stat-label2">Active Deals</div><div class="stat-value" id="dash-active-deals">0</div><div class="stat-trend trend-up">↑ Live on site</div><div class="stat-icon-bg">✅</div></div>
+        </div>
+        <div class="grid-3">
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Weekly Clicks</div></div>
+            <div class="panel-body"><div class="mini-chart" id="weekly-chart"></div><div class="chart-labels" id="weekly-labels"></div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Categories</div></div>
+            <div class="panel-body">
+              <div class="cat-list">
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">📱 Smartphones</span><span class="cat-pct">34%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:34%"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">💻 Laptops</span><span class="cat-pct">28%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:28%"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">🎧 Audio</span><span class="cat-pct">22%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:22%"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">⌚ Wearables</span><span class="cat-pct">10%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:10%"></div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Recent Deals</div><button class="panel-action" onclick="showPage('deals',document.querySelectorAll('.nav-item')[1])">View All</button></div>
+            <div class="panel-body" style="padding:0"><table class="data-table"><thead><tr><th>DEAL</th><th>PRICE</th><th>DISC.</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody id="dash-deals-table"></tbody></table></div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Activity</div></div>
+            <div class="panel-body" style="padding:0 24px">
+              <div class="activity-list">
+                <div class="activity-item"><div class="activity-dot a-orange">🏷️</div><div class="activity-text"><strong>New deal added</strong><br><span>boAt Airdopes 141 @ ₹999</span></div><div class="activity-time">2m ago</div></div>
+                <div class="activity-item"><div class="activity-dot a-green">💰</div><div class="activity-text"><strong>Commission earned</strong><br><span>₹148 from Redmi 13C click</span></div><div class="activity-time">1h ago</div></div>
+                <div class="activity-item"><div class="activity-dot a-blue">📱</div><div class="activity-text"><strong>Instagram scheduled</strong><br><span>Flash Sale Alert – 6 PM</span></div><div class="activity-time">3h ago</div></div>
+                <div class="activity-item"><div class="activity-dot a-orange">📈</div><div class="activity-text"><strong>Traffic spike</strong><br><span>340 visitors in last 2h</span></div><div class="activity-time">4h ago</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DEALS -->
+      <div class="page" id="page-deals">
+        <div class="page-toolbar">
+          <div class="toolbar-left">
+            <div class="search-box"><span>🔍</span><input type="text" placeholder="Search deals..." id="deal-search" oninput="filterDeals()"></div>
+            <select class="filter-select" id="deal-filter" onchange="filterDeals()">
+              <option value="">All Categories</option>
+              <option>Smartphones</option><option>Laptops</option><option>Audio</option>
+              <option>Wearables</option><option>Smart Home</option><option>Accessories</option>
+            </select>
+          </div>
+          <button class="btn-add" onclick="openModal()">＋ Add New Deal</button>
+        </div>
+        <div class="deals-admin-grid" id="deals-grid"></div>
+      </div>
+
+      <!-- INSTAGRAM -->
+      <div class="page" id="page-instagram">
+        <div class="insta-page-grid">
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Create Post</div></div>
+            <div class="panel-body">
+              <div class="post-type-tabs">
+                <button class="tab-btn active" onclick="setTab(this)">Deal Alert</button>
+                <button class="tab-btn" onclick="setTab(this)">Review</button>
+                <button class="tab-btn" onclick="setTab(this)">Flash Sale</button>
+                <button class="tab-btn" onclick="setTab(this)">Tip</button>
+              </div>
+              <div class="form-group"><label class="form-label">Caption</label><textarea class="form-input" id="post-caption" rows="5" oninput="updatePreview()">🔥 DEAL ALERT!
+
+boAt Airdopes 141 @ just ₹999!
+Was ₹2990 — that's 67% OFF 🤯
+
+Grab it before it's gone 👆 Link in bio!</textarea></div>
+              <div class="form-group"><label class="form-label">Quick Hashtags</label>
+                <div class="hashtag-box">
+                  <span class="hashtag" onclick="addHashtag(this)">#NagpurViralTech</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#NagpurDeals</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#TechDeals</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#DealAlert</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#FlashSale</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#Nagpur</span>
+                  <span class="hashtag" onclick="addHashtag(this)">#BestPrice</span>
+                </div>
+              </div>
+              <div class="form-group"><label class="form-label">Schedule Post</label><input class="form-input" type="datetime-local"></div>
+              <button class="btn-add" style="width:100%;justify-content:center;margin-top:8px" onclick="showToast('Post scheduled! (Connect Instagram Graph API to autopost)')">📤 Schedule Post</button>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Phone Preview</div></div>
+            <div class="panel-body" style="display:flex;justify-content:center;padding:32px">
+              <div class="phone-mockup">
+                <div class="phone-top"><div class="phone-notch-bar"></div></div>
+                <div class="phone-screen">
+                  <div class="insta-header-mock"><div class="insta-avatar"></div><div><div class="insta-user">nagpurviraltech</div><div class="insta-time">Just now</div></div></div>
+                  <div class="insta-img-mock">🎧</div>
+                  <div class="insta-caption" id="preview-caption">🔥 DEAL ALERT!
+
+boAt Airdopes 141 @ just ₹999!</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div class="page" id="page-analytics">
+        <div class="analytics-row">
+          <div class="analytics-mini-card"><div class="analytics-mini-label">THIS MONTH CLICKS</div><div class="analytics-mini-val">2,418</div><div class="analytics-mini-sub trend-up">↑ 18% vs last month</div></div>
+          <div class="analytics-mini-card"><div class="analytics-mini-label">COMMISSION EARNED</div><div class="analytics-mini-val">₹3,840</div><div class="analytics-mini-sub trend-up">↑ ₹600 this month</div></div>
+          <div class="analytics-mini-card"><div class="analytics-mini-label">CONVERSION RATE</div><div class="analytics-mini-val">4.2%</div><div class="analytics-mini-sub trend-up">↑ 0.8% improvement</div></div>
+        </div>
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Click Trends — Last 30 Days</div></div>
+          <div class="panel-body"><div class="big-chart" id="big-chart"></div><div style="height:28px"></div></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Top Performing Deals</div></div>
+            <div class="panel-body" style="padding:0">
+              <table class="data-table">
+                <thead><tr><th>DEAL</th><th>CLICKS</th><th>COMMISSION</th><th>CONV.</th></tr></thead>
+                <tbody>
+                  <tr><td><div class="deal-thumb-wrap"><div class="deal-thumb">🎧</div><div><div class="deal-cell-name">boAt Airdopes 141</div><div class="deal-cell-cat">Audio</div></div></div></td><td>642</td><td style="color:var(--green)">₹984</td><td><span class="chip chip-green">5.8%</span></td></tr>
+                  <tr><td><div class="deal-thumb-wrap"><div class="deal-thumb">📱</div><div><div class="deal-cell-name">Redmi 13C 5G</div><div class="deal-cell-cat">Smartphones</div></div></div></td><td>518</td><td style="color:var(--green)">₹1,244</td><td><span class="chip chip-green">4.2%</span></td></tr>
+                  <tr><td><div class="deal-thumb-wrap"><div class="deal-thumb">💻</div><div><div class="deal-cell-name">Lenovo IdeaPad</div><div class="deal-cell-cat">Laptops</div></div></div></td><td>310</td><td style="color:var(--green)">₹892</td><td><span class="chip chip-orange">3.1%</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Traffic Sources</div></div>
+            <div class="panel-body">
+              <div class="cat-list">
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">📱 Instagram</span><span class="cat-pct">58%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:58%"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">🔗 Direct</span><span class="cat-pct">22%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:22%;background:var(--blue)"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">💬 WhatsApp</span><span class="cat-pct">12%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:12%;background:var(--green)"></div></div></div>
+                <div class="cat-item"><div class="cat-item-top"><span class="cat-name">🔍 Google</span><span class="cat-pct">8%</span></div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:8%;background:var(--yellow)"></div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CATEGORIES -->
+      <div class="page" id="page-categories">
+        <div class="panel">
+          <div class="panel-body" style="padding:0">
+            <table class="data-table">
+              <thead><tr><th>ICON</th><th>CATEGORY</th><th>DEALS</th><th>STATUS</th><th>ACTIONS</th></tr></thead>
+              <tbody>
+                <tr><td>📱</td><td><strong>Smartphones</strong></td><td>2</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+                <tr><td>💻</td><td><strong>Laptops</strong></td><td>1</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+                <tr><td>🎧</td><td><strong>Audio</strong></td><td>1</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+                <tr><td>⌚</td><td><strong>Wearables</strong></td><td>1</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+                <tr><td>🏠</td><td><strong>Smart Home</strong></td><td>1</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+                <tr><td>🔌</td><td><strong>Accessories</strong></td><td>1</td><td><span class="chip chip-green">Active</span></td><td><button class="action-btn">Edit</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- AFFILIATES -->
+      <div class="page" id="page-affiliates">
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header"><div class="panel-title"><div class="panel-title-dot"></div> Affiliate Programs</div></div>
+          <div class="panel-body" style="padding:0">
+            <table class="data-table">
+              <thead><tr><th>PLATFORM</th><th>COMMISSION</th><th>TOTAL EARNED</th><th>STATUS</th><th>ACTIONS</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Amazon Associates</strong></td><td>4–8%</td><td style="color:var(--green)">₹2,140</td><td><span class="chip chip-green">Connected</span></td><td><button class="action-btn">Edit Link</button></td></tr>
+                <tr><td><strong>Flipkart Affiliate</strong></td><td>4–12%</td><td style="color:var(--green)">₹1,700</td><td><span class="chip chip-green">Connected</span></td><td><button class="action-btn">Edit Link</button></td></tr>
+                <tr><td><strong>Cuelinks</strong></td><td>Varies</td><td style="color:var(--muted)">₹0</td><td><span class="chip chip-red">Not Set</span></td><td><button class="action-btn">Connect</button></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" id="page-settings">
+        <div class="settings-grid">
+          <div class="settings-sidebar">
+            <div class="settings-nav">
+              <div class="settings-nav-item active">⚙️ General</div>
+              <div class="settings-nav-item">🎨 Appearance</div>
+              <div class="settings-nav-item">📱 Instagram</div>
+              <div class="settings-nav-item">💰 Affiliate</div>
+              <div class="settings-nav-item">🔒 Security</div>
+            </div>
+          </div>
+          <div>
+            <div class="settings-section">
+              <div class="settings-section-title">Site Settings</div>
+              <div class="settings-section-desc">Basic configuration for your NagpurViralTech website.</div>
+              <div class="form-row-2">
+                <div class="form-group"><label class="form-label">Site Name</label><input class="form-input" id="s-site-name" value="NagpurViralTech"></div>
+                <div class="form-group"><label class="form-label">Tagline</label><input class="form-input" id="s-tagline" value="Quality. Deals. Trust."></div>
+              </div>
+              <div class="form-group"><label class="form-label">Instagram Handle</label><input class="form-input" id="s-instagram" value="@NagpurViralTech"></div>
+              <div class="form-group"><label class="form-label">WhatsApp Number</label><input class="form-input" id="s-whatsapp" placeholder="+91 XXXXX XXXXX"></div>
+              <button class="btn-save" onclick="saveSettings()">Save Changes</button>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-title">Feature Toggles</div>
+              <div class="settings-section-desc">Enable or disable website features.</div>
+              <div class="toggle-row"><div><div class="toggle-label">Show Deals Section</div><div class="toggle-desc">Display deal cards on main site</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>
+              <div class="toggle-row"><div><div class="toggle-label">Deal Countdown Timers</div><div class="toggle-desc">Show urgency countdowns</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>
+              <div class="toggle-row"><div><div class="toggle-label">WhatsApp Button</div><div class="toggle-desc">Floating WhatsApp chat button</div></div><label class="toggle"><input type="checkbox" checked><span class="toggle-slider"></span></label></div>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-title">Change Password</div>
+              <div class="settings-section-desc">Update your admin login credentials.</div>
+              <div class="form-row-2">
+                <div class="form-group"><label class="form-label">Current Password</label><input class="form-input" type="password" placeholder="••••••••"></div>
+                <div class="form-group"><label class="form-label">New Password</label><input class="form-input" type="password" placeholder="••••••••"></div>
+              </div>
+              <button class="btn-save" onclick="changePassword()">Update Password</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- end content -->
+  </div><!-- end main -->
+</div><!-- end app -->
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">ADD NEW DEAL</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Product Emoji</label>
+        <div class="emoji-picker">
+          <div class="emoji-opt selected" data-e="📱" onclick="selectEmoji(this,'📱')">📱</div>
+          <div class="emoji-opt" data-e="💻" onclick="selectEmoji(this,'💻')">💻</div>
+          <div class="emoji-opt" data-e="🎧" onclick="selectEmoji(this,'🎧')">🎧</div>
+          <div class="emoji-opt" data-e="⌚" onclick="selectEmoji(this,'⌚')">⌚</div>
+          <div class="emoji-opt" data-e="🏠" onclick="selectEmoji(this,'🏠')">🏠</div>
+          <div class="emoji-opt" data-e="🔋" onclick="selectEmoji(this,'🔋')">🔋</div>
+          <div class="emoji-opt" data-e="🖥️" onclick="selectEmoji(this,'🖥️')">🖥️</div>
+          <div class="emoji-opt" data-e="📷" onclick="selectEmoji(this,'📷')">📷</div>
+          <div class="emoji-opt" data-e="🎮" onclick="selectEmoji(this,'🎮')">🎮</div>
+          <div class="emoji-opt" data-e="⌨️" onclick="selectEmoji(this,'⌨️')">⌨️</div>
+          <div class="emoji-opt" data-e="🖱️" onclick="selectEmoji(this,'🖱️')">🖱️</div>
+          <div class="emoji-opt" data-e="📦" onclick="selectEmoji(this,'📦')">📦</div>
+        </div>
+      </div>
+      <div class="modal-row">
+        <div class="form-group"><label class="form-label">Product Name</label><input class="form-input" id="modal-name" placeholder="e.g. Redmi Note 13 Pro"></div>
+        <div class="form-group"><label class="form-label">Category</label><select class="form-input" id="modal-cat"><option>Smartphones</option><option>Laptops</option><option>Audio</option><option>Wearables</option><option>Smart Home</option><option>Accessories</option></select></div>
+      </div>
+      <div class="modal-row">
+        <div class="form-group"><label class="form-label">Deal Price (₹)</label><input class="form-input" id="modal-price" type="number" placeholder="999"></div>
+        <div class="form-group"><label class="form-label">Original Price (₹)</label><input class="form-input" id="modal-orig" type="number" placeholder="2990"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Description</label><textarea class="form-input" id="modal-desc" rows="3" placeholder="Key features and why this deal is worth it..."></textarea></div>
+      <div class="modal-row">
+        <div class="form-group"><label class="form-label">Affiliate Link</label><input class="form-input" id="modal-link" placeholder="https://amzn.to/..."></div>
+        <div class="form-group"><label class="form-label">Badge Label</label><input class="form-input" id="modal-badge" placeholder="e.g. HOT 🔥"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Status</label><select class="form-input" id="modal-status"><option>Active</option><option>Inactive</option><option>Expired</option></select></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn-add" onclick="saveDeal()">＋ Save Deal</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" style="position:fixed;bottom:28px;right:28px;font-family:'DM Mono',monospace;font-size:.72rem;letter-spacing:1.5px;padding:12px 22px;z-index:9999;transform:translateY(80px);opacity:0;transition:transform .3s,opacity .3s;"></div>
+
+<script>
+// Page navigation (non-module, so accessible inline)
+function showPage(id, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const pg = document.getElementById('page-' + id);
+  if (pg) pg.classList.add('active');
+  if (btn) btn.classList.add('active');
+  const titles = { dashboard:'DASHBOARD', deals:'MANAGE DEALS', instagram:'INSTAGRAM', analytics:'ANALYTICS', categories:'CATEGORIES', affiliates:'AFFILIATE LINKS', settings:'SETTINGS' };
+  document.getElementById('page-title').textContent = titles[id] || id.toUpperCase();
+  document.getElementById('page-breadcrumb').textContent = 'NAGPURVIRALTECH / ' + (titles[id] || id.toUpperCase());
+  // Show firebase notice on dashboard if using local mode
+  const notice = document.getElementById('firebase-notice');
+  if (notice && id === 'dashboard') {
+    if (window._nvt && window._nvt.useLocal) notice.style.display = 'flex';
+  }
+}
+
+// Fallbacks for module-not-yet-loaded state
+window.doLogin    = window.doLogin    || (() => {});
+window.doLogout   = window.doLogout   || (() => {});
+window.openModal  = window.openModal  || (() => {});
+window.closeModal = window.closeModal || (() => {});
+window.saveDeal   = window.saveDeal   || (() => {});
+window.filterDeals= window.filterDeals|| (() => {});
+</script>
+</body>
+</html>

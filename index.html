@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NagpurViralTech – Quality. Deals. Trust.</title>
+<meta name="description" content="Nagpur's most trusted tech deals platform. Quality verified, affiliate-powered deals curated for Nagpur.">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Syne:wght@400;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, collection, getDocs, onSnapshot, query, orderBy, where, doc, updateDoc, increment }
+         from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ── bootstrap after config loads ──
+  window.addEventListener('DOMContentLoaded', async () => {
+    // Inline config fallback (replace with your real values, or use firebase-config.js)
+    const cfg = window.FIREBASE_CONFIG || {
+      apiKey:"AIzaSyDEMO_REPLACE_ME", authDomain:"demo.firebaseapp.com",
+      projectId:"demo", storageBucket:"demo.appspot.com",
+      messagingSenderId:"000", appId:"1:000:web:000"
+    };
+
+    let db = null;
+    let useLocal = false;
+
+    try {
+      const app = initializeApp(cfg);
+      db = getFirestore(app);
+      // Test connectivity with a small read
+      await getDocs(query(collection(db, "deals")));
+    } catch(e) {
+      console.warn("Firebase unavailable, using local seed data:", e.message);
+      useLocal = true;
+    }
+
+    if (useLocal) {
+      renderDeals(window.SEED_DEALS || []);
+      return;
+    }
+
+    // Real-time listener — deals re-render whenever admin changes anything
+    const q = query(collection(db,"deals"), where("status","==","Active"), orderBy("createdAt","desc"));
+    onSnapshot(q, snap => {
+      const deals = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderDeals(deals.length ? deals : (window.SEED_DEALS || []));
+    }, () => renderDeals(window.SEED_DEALS || []));
+
+    // Track affiliate click + increment counter
+    window.trackClick = async (dealId, url) => {
+      if (db && dealId) {
+        try { await updateDoc(doc(db,"deals",dealId), { clicks: increment(1) }); } catch(_){}
+      }
+      window.open(url, '_blank');
+    };
+  });
+
+  function renderDeals(deals) {
+    const grid = document.getElementById('deals-grid');
+    if (!grid) return;
+    if (!deals.length) {
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--muted);font-family:'Space Mono',monospace;font-size:0.8rem;letter-spacing:2px;">NO ACTIVE DEALS RIGHT NOW — CHECK BACK SOON</div>`;
+      return;
+    }
+    grid.innerHTML = deals.map(d => {
+      const disc = Math.round((1 - d.price / d.orig) * 100);
+      const clickFn = d.id ? `trackClick('${d.id}','${d.link}')` : `window.open('${d.link}','_blank')`;
+      return `
+      <div class="deal-card">
+        <div class="deal-badge">${d.badge || 'DEAL'}</div>
+        <div class="deal-img-placeholder" style="background:linear-gradient(135deg,#1a0a00,#2a1400);">${d.emoji || '🛍️'}</div>
+        <div class="deal-body">
+          <div class="deal-cat">${d.cat}</div>
+          <div class="deal-name">${d.name}</div>
+          <p class="deal-desc">${d.desc}</p>
+          <div class="deal-pricing">
+            <div class="deal-price">₹${Number(d.price).toLocaleString()}</div>
+            <div class="deal-original">₹${Number(d.orig).toLocaleString()}</div>
+            <div class="deal-save">SAVE ${disc}%</div>
+          </div>
+          <button class="deal-btn" onclick="${clickFn}">Grab This Deal →</button>
+        </div>
+      </div>`;
+    }).join('');
+    // Update hero stat
+    const el = document.getElementById('stat-deals');
+    if (el) el.textContent = deals.length + '+';
+  }
+  window.renderDeals = renderDeals;
+</script>
+<script src="firebase-config.js" onerror="console.warn('No firebase-config.js found')"></script>
+
+<style>
+:root {
+  --bg:#0a0a0a; --surface:#111; --card:#161616; --border:#222;
+  --orange:#ff6200; --orange2:#ff8c00; --yellow:#ffd000;
+  --white:#f5f5f0; --muted:#888;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{background:var(--bg);color:var(--white);font-family:'Syne',sans-serif;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");pointer-events:none;z-index:9999;opacity:.35;}
+
+nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:18px 40px;background:rgba(10,10,10,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);}
+.nav-logo{font-family:'Bebas Neue',sans-serif;font-size:1.7rem;letter-spacing:2px;}
+.nav-logo span{color:var(--orange);}
+.nav-links{display:flex;gap:32px;list-style:none;}
+.nav-links a{color:var(--muted);text-decoration:none;font-size:.82rem;font-weight:700;letter-spacing:2px;text-transform:uppercase;transition:color .2s;}
+.nav-links a:hover{color:var(--orange);}
+.nav-cta{background:var(--orange);color:#000;padding:9px 20px;font-family:'Space Mono',monospace;font-size:.72rem;font-weight:700;letter-spacing:1px;border:none;cursor:pointer;text-decoration:none;transition:background .2s,transform .15s;}
+.nav-cta:hover{background:var(--yellow);transform:translateY(-1px);}
+
+.hero{min-height:100vh;display:grid;place-items:center;text-align:center;padding:140px 24px 80px;position:relative;overflow:hidden;}
+.hero-grid-bg{position:absolute;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:60px 60px;opacity:.3;}
+.hero-orb{position:absolute;width:600px;height:600px;background:radial-gradient(circle,rgba(255,98,0,.22) 0%,transparent 70%);top:50%;left:50%;transform:translate(-50%,-50%);animation:pulse 4s ease-in-out infinite;}
+@keyframes pulse{0%,100%{transform:translate(-50%,-50%) scale(1);opacity:.7;}50%{transform:translate(-50%,-50%) scale(1.1);opacity:1;}}
+.hero-badge{display:inline-block;font-family:'Space Mono',monospace;font-size:.68rem;color:var(--orange);letter-spacing:3px;text-transform:uppercase;border:1px solid var(--orange);padding:6px 16px;margin-bottom:28px;animation:fadeUp .8s ease both;}
+.hero h1{font-family:'Bebas Neue',sans-serif;font-size:clamp(4rem,12vw,9rem);line-height:.92;letter-spacing:2px;animation:fadeUp .9s .1s ease both;}
+.hero h1 .accent{color:var(--orange);}
+.hero h1 .line2{display:block;-webkit-text-stroke:1.5px var(--white);color:transparent;}
+.hero-sub{font-size:1rem;color:var(--muted);max-width:500px;line-height:1.7;margin:24px auto 0;animation:fadeUp 1s .25s ease both;}
+.hero-actions{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin-top:40px;animation:fadeUp 1s .35s ease both;}
+.btn-primary{background:var(--orange);color:#000;border:none;padding:14px 32px;font-family:'Space Mono',monospace;font-size:.8rem;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;text-decoration:none;transition:background .2s,transform .15s,box-shadow .2s;}
+.btn-primary:hover{background:var(--yellow);transform:translateY(-2px);box-shadow:0 8px 30px rgba(255,98,0,.4);}
+.btn-ghost{background:transparent;color:var(--white);border:1.5px solid var(--border);padding:13px 32px;font-family:'Space Mono',monospace;font-size:.8rem;letter-spacing:1.5px;text-transform:uppercase;cursor:pointer;text-decoration:none;transition:border-color .2s,color .2s;}
+.btn-ghost:hover{border-color:var(--orange);color:var(--orange);}
+.hero-stats{display:flex;gap:48px;justify-content:center;flex-wrap:wrap;margin-top:72px;animation:fadeUp 1s .45s ease both;}
+.stat{text-align:center;}
+.stat-num{font-family:'Bebas Neue',sans-serif;font-size:2.8rem;color:var(--orange);line-height:1;}
+.stat-label{font-size:.7rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:4px;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(28px);}to{opacity:1;transform:translateY(0);}}
+
+.ticker-wrap{overflow:hidden;background:var(--orange);padding:12px 0;}
+.ticker-track{display:flex;white-space:nowrap;animation:ticker 22s linear infinite;}
+.ticker-item{font-family:'Bebas Neue',sans-serif;font-size:1.1rem;color:#000;letter-spacing:3px;padding:0 36px;}
+@keyframes ticker{from{transform:translateX(0);}to{transform:translateX(-50%);}}
+
+section{padding:100px 24px;}
+.container{max-width:1100px;margin:0 auto;}
+.section-tag{font-family:'Space Mono',monospace;font-size:.68rem;color:var(--orange);letter-spacing:3px;text-transform:uppercase;margin-bottom:12px;}
+.section-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(2.4rem,5vw,4rem);line-height:1;letter-spacing:1px;margin-bottom:16px;}
+.section-sub{color:var(--muted);font-size:.95rem;line-height:1.7;max-width:520px;margin-bottom:56px;}
+
+/* Quality grid */
+.quality-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:2px;background:var(--border);border:1px solid var(--border);}
+.quality-card{background:var(--card);padding:40px 32px;transition:background .25s;position:relative;overflow:hidden;}
+.quality-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--orange);transform:scaleX(0);transform-origin:left;transition:transform .3s;}
+.quality-card:hover{background:#1c1c1c;}
+.quality-card:hover::before{transform:scaleX(1);}
+.qcard-icon{font-size:2rem;margin-bottom:20px;}
+.qcard-num{font-family:'Bebas Neue',sans-serif;font-size:3.5rem;color:var(--orange);opacity:.12;position:absolute;top:20px;right:24px;line-height:1;}
+.qcard-title{font-size:1.1rem;font-weight:800;margin-bottom:10px;}
+.qcard-text{color:var(--muted);font-size:.88rem;line-height:1.7;}
+
+/* Deals */
+#deals{background:var(--surface);}
+.deals-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px;}
+.deal-card{background:var(--card);border:1px solid var(--border);overflow:hidden;transition:transform .25s,box-shadow .25s,border-color .25s;position:relative;}
+.deal-card:hover{transform:translateY(-5px);box-shadow:0 16px 50px rgba(255,98,0,.15);border-color:var(--orange);}
+.deal-badge{position:absolute;top:16px;right:16px;background:var(--orange);color:#000;font-family:'Bebas Neue',sans-serif;font-size:1rem;letter-spacing:1px;padding:4px 12px;}
+.deal-img-placeholder{height:180px;display:flex;align-items:center;justify-content:center;font-size:3.5rem;position:relative;}
+.deal-body{padding:24px;}
+.deal-cat{font-family:'Space Mono',monospace;font-size:.62rem;color:var(--orange);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+.deal-name{font-size:1.05rem;font-weight:800;margin-bottom:8px;}
+.deal-desc{color:var(--muted);font-size:.83rem;line-height:1.6;margin-bottom:20px;}
+.deal-pricing{display:flex;align-items:center;gap:12px;margin-bottom:20px;}
+.deal-price{font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--orange);line-height:1;}
+.deal-original{font-size:.85rem;color:var(--muted);text-decoration:line-through;}
+.deal-save{font-family:'Space Mono',monospace;font-size:.65rem;color:var(--yellow);letter-spacing:1px;}
+.deal-btn{display:block;width:100%;background:transparent;border:1.5px solid var(--orange);color:var(--orange);padding:11px;font-family:'Space Mono',monospace;font-size:.75rem;letter-spacing:2px;text-transform:uppercase;text-align:center;cursor:pointer;transition:background .2s,color .2s;}
+.deal-btn:hover{background:var(--orange);color:#000;}
+
+/* Skeleton loader */
+.skeleton{animation:shimmer 1.5s infinite linear;background:linear-gradient(90deg,var(--card) 25%,#1e1e1e 50%,var(--card) 75%);background-size:200% 100%;}
+@keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+
+/* Instagram section */
+.insta-section{background:linear-gradient(135deg,#111 0%,#1a0a00 50%,#111 100%);border-top:1px solid var(--border);border-bottom:1px solid var(--border);overflow:hidden;position:relative;}
+.insta-section::before{content:'◈';font-size:30rem;color:rgba(255,98,0,.04);position:absolute;right:-80px;top:-80px;line-height:1;}
+.insta-inner{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:40px;}
+.insta-left{max-width:560px;}
+.insta-handle{font-family:'Bebas Neue',sans-serif;font-size:clamp(2rem,5vw,3.5rem);color:var(--orange);letter-spacing:2px;display:block;}
+.insta-title{font-family:'Bebas Neue',sans-serif;font-size:clamp(2.4rem,6vw,4.5rem);line-height:.95;letter-spacing:1px;margin-bottom:20px;}
+.insta-text{color:var(--muted);font-size:.92rem;line-height:1.7;margin-bottom:32px;}
+.insta-features{display:flex;flex-direction:column;gap:10px;margin-bottom:32px;}
+.insta-feat{display:flex;align-items:center;gap:12px;font-size:.85rem;color:var(--muted);}
+.insta-feat::before{content:'▸';color:var(--orange);font-size:.9rem;}
+.insta-phone{width:220px;height:420px;background:var(--card);border:1px solid #2a2a2a;border-radius:32px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 60px rgba(255,98,0,.08);}
+.phone-notch{width:80px;height:24px;background:var(--bg);border-radius:0 0 16px 16px;margin:0 auto;}
+.phone-feed{flex:1;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:hidden;}
+.feed-post{background:var(--surface);border-radius:8px;padding:10px;font-size:.65rem;border-left:2.5px solid var(--orange);}
+.feed-title{font-weight:700;color:var(--white);margin-bottom:3px;}
+.feed-sub{color:var(--muted);}
+.phone-bottom{padding:12px;border-top:1px solid var(--border);text-align:center;}
+.phone-tag{font-family:'Space Mono',monospace;font-size:.6rem;color:var(--orange);letter-spacing:1px;}
+
+/* How it works */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0;border:1px solid var(--border);background:var(--border);}
+.step{background:var(--card);padding:40px 28px;position:relative;overflow:hidden;}
+.step-num{font-family:'Bebas Neue',sans-serif;font-size:5rem;color:rgba(255,98,0,.07);position:absolute;top:-10px;right:16px;line-height:1;}
+.step-icon{font-size:1.8rem;margin-bottom:16px;}
+.step-title{font-size:1rem;font-weight:800;margin-bottom:10px;}
+.step-text{color:var(--muted);font-size:.85rem;line-height:1.6;}
+
+.cta-strip{background:var(--orange);padding:80px 24px;text-align:center;position:relative;overflow:hidden;}
+.cta-strip::before{content:'NAGPUR';font-family:'Bebas Neue',sans-serif;font-size:14rem;color:rgba(0,0,0,.06);position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);letter-spacing:10px;white-space:nowrap;}
+.cta-strip h2{font-family:'Bebas Neue',sans-serif;font-size:clamp(2.5rem,6vw,5rem);color:#000;letter-spacing:2px;line-height:1;margin-bottom:12px;position:relative;}
+.cta-strip p{color:rgba(0,0,0,.65);font-size:.95rem;margin-bottom:32px;position:relative;}
+.btn-dark{background:#000;color:var(--white);padding:15px 40px;font-family:'Space Mono',monospace;font-size:.82rem;letter-spacing:2px;text-transform:uppercase;border:none;cursor:pointer;text-decoration:none;transition:background .2s,transform .15s;position:relative;display:inline-block;}
+.btn-dark:hover{background:#1a1a1a;transform:translateY(-2px);}
+
+footer{background:var(--surface);border-top:1px solid var(--border);padding:60px 24px 30px;}
+.footer-inner{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:48px;margin-bottom:48px;}
+.footer-logo{font-family:'Bebas Neue',sans-serif;font-size:2rem;letter-spacing:2px;margin-bottom:14px;}
+.footer-logo span{color:var(--orange);}
+.footer-desc{color:var(--muted);font-size:.83rem;line-height:1.7;margin-bottom:20px;}
+.footer-social{display:flex;gap:12px;}
+.social-btn{width:38px;height:38px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.85rem;text-decoration:none;transition:border-color .2s,color .2s;}
+.social-btn:hover{border-color:var(--orange);color:var(--orange);}
+.footer-col h4{font-family:'Space Mono',monospace;font-size:.68rem;letter-spacing:2px;text-transform:uppercase;color:var(--white);margin-bottom:20px;}
+.footer-col ul{list-style:none;display:flex;flex-direction:column;gap:10px;}
+.footer-col ul a{color:var(--muted);text-decoration:none;font-size:.85rem;transition:color .2s;}
+.footer-col ul a:hover{color:var(--orange);}
+.footer-bottom{max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;padding-top:28px;border-top:1px solid var(--border);}
+.footer-copy{color:var(--muted);font-family:'Space Mono',monospace;font-size:.68rem;letter-spacing:1px;}
+.footer-copy span{color:var(--orange);}
+
+/* Affiliate disclosure */
+.disclosure{background:rgba(255,98,0,.05);border:1px solid rgba(255,98,0,.15);padding:12px 20px;text-align:center;font-family:'Space Mono',monospace;font-size:.62rem;color:var(--muted);letter-spacing:1px;}
+
+/* Loading skeleton cards */
+.deal-card.loading .deal-img-placeholder{height:180px;}
+.deal-card.loading .deal-body > *{border-radius:4px;margin-bottom:12px;}
+
+@media(max-width:768px){nav{padding:16px 20px;}.nav-links{display:none;}.footer-inner{grid-template-columns:1fr 1fr;}.insta-inner{justify-content:center;text-align:center;}.insta-features{align-items:center;}.insta-phone{display:none;}}
+@media(max-width:480px){.footer-inner{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-logo">Nagpur<span>Viral</span>Tech</div>
+  <ul class="nav-links">
+    <li><a href="#quality">Quality</a></li>
+    <li><a href="#deals">Deals</a></li>
+    <li><a href="#insta">Instagram</a></li>
+    <li><a href="#how">How It Works</a></li>
+  </ul>
+  <a href="#deals" class="nav-cta">View Deals →</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-grid-bg"></div>
+  <div class="hero-orb"></div>
+  <div style="position:relative;z-index:2;">
+    <div class="hero-badge">🔥 Nagpur's #1 Tech &amp; Deals Platform</div>
+    <h1>VIRAL<span class="accent">TECH</span><span class="line2">NAGPUR</span></h1>
+    <p class="hero-sub">Quality products. Unbeatable deals. All curated for Nagpur. We verify every offer so you never waste a rupee.</p>
+    <div class="hero-actions">
+      <a href="#deals" class="btn-primary">Browse Deals</a>
+      <a href="https://instagram.com/nagpurviraltech" target="_blank" class="btn-ghost">Follow on Instagram</a>
+    </div>
+    <div class="hero-stats">
+      <div class="stat"><div class="stat-num" id="stat-deals">6+</div><div class="stat-label">Deals Posted</div></div>
+      <div class="stat"><div class="stat-num">12K+</div><div class="stat-label">Happy Followers</div></div>
+      <div class="stat"><div class="stat-num">100%</div><div class="stat-label">Quality Checked</div></div>
+      <div class="stat"><div class="stat-num">₹0</div><div class="stat-label">Hidden Fees</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TICKER -->
+<div class="ticker-wrap">
+  <div class="ticker-track">
+    <span class="ticker-item">BEST DEALS IN NAGPUR ◆</span><span class="ticker-item">QUALITY FIRST ◆</span>
+    <span class="ticker-item">TRUSTED BY THOUSANDS ◆</span><span class="ticker-item">ONLY VERIFIED OFFERS ◆</span>
+    <span class="ticker-item">FOLLOW @NAGPURVIRALTECH ◆</span><span class="ticker-item">SAVE MORE EVERY DAY ◆</span>
+    <span class="ticker-item">BEST DEALS IN NAGPUR ◆</span><span class="ticker-item">QUALITY FIRST ◆</span>
+    <span class="ticker-item">TRUSTED BY THOUSANDS ◆</span><span class="ticker-item">ONLY VERIFIED OFFERS ◆</span>
+    <span class="ticker-item">FOLLOW @NAGPURVIRALTECH ◆</span><span class="ticker-item">SAVE MORE EVERY DAY ◆</span>
+  </div>
+</div>
+
+<!-- QUALITY -->
+<section id="quality">
+  <div class="container">
+    <div class="section-tag">Why We're Different</div>
+    <div class="section-title">QUALITY IS<br>NOT OPTIONAL</div>
+    <p class="section-sub">Every product and deal we post is researched, tested, and verified. We don't push junk — only what's genuinely worth your money.</p>
+    <div class="quality-grid">
+      <div class="quality-card"><div class="qcard-num">01</div><div class="qcard-icon">🔍</div><div class="qcard-title">Deep Research</div><p class="qcard-text">We spend hours researching each product — reading reviews, comparing specs, and checking real user feedback before recommending anything.</p></div>
+      <div class="quality-card"><div class="qcard-num">02</div><div class="qcard-icon">✅</div><div class="qcard-title">Verified Sellers Only</div><p class="qcard-text">We only list deals from trusted, verified sellers and platforms. No shady websites, no fake discounts — just real value.</p></div>
+      <div class="quality-card"><div class="qcard-num">03</div><div class="qcard-icon">💯</div><div class="qcard-title">Honest Reviews</div><p class="qcard-text">We tell you the pros AND cons. If something isn't worth it, we say so — even if it means fewer commissions for us.</p></div>
+      <div class="quality-card"><div class="qcard-num">04</div><div class="qcard-icon">🏆</div><div class="qcard-title">Best Price Guarantee</div><p class="qcard-text">We track price history and only post when the deal is genuinely the best available. We won't hype average discounts.</p></div>
+      <div class="quality-card"><div class="qcard-num">05</div><div class="qcard-icon">⚡</div><div class="qcard-title">Lightning Fast Updates</div><p class="qcard-text">Flash sales are time-sensitive. We post instantly on Instagram so you never miss a deal. Turn on notifications!</p></div>
+      <div class="quality-card"><div class="qcard-num">06</div><div class="qcard-icon">🤝</div><div class="qcard-title">Nagpur First</div><p class="qcard-text">We focus specifically on deals, stores, and services that benefit Nagpur residents — local and online both.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- DEALS (populated from Firebase) -->
+<section id="deals">
+  <div class="container">
+    <div class="section-tag">Hot Right Now</div>
+    <div class="section-title">TODAY'S BEST<br>DEALS</div>
+    <p class="section-sub">Handpicked, verified offers. Click any deal to grab it — we earn a small commission at no extra cost to you.</p>
+    <div class="deals-grid" id="deals-grid">
+      <!-- Loading skeletons -->
+      <div class="deal-card loading"><div class="deal-img-placeholder skeleton"></div><div class="deal-body"><div style="height:14px;width:40%;margin-bottom:10px;" class="skeleton"></div><div style="height:18px;width:80%;margin-bottom:10px;" class="skeleton"></div><div style="height:12px;width:100%;margin-bottom:6px;" class="skeleton"></div><div style="height:12px;width:90%;margin-bottom:20px;" class="skeleton"></div><div style="height:36px;width:50%;margin-bottom:20px;" class="skeleton"></div><div style="height:40px;" class="skeleton"></div></div></div>
+      <div class="deal-card loading"><div class="deal-img-placeholder skeleton"></div><div class="deal-body"><div style="height:14px;width:40%;margin-bottom:10px;" class="skeleton"></div><div style="height:18px;width:80%;margin-bottom:10px;" class="skeleton"></div><div style="height:12px;width:100%;margin-bottom:6px;" class="skeleton"></div><div style="height:12px;width:90%;margin-bottom:20px;" class="skeleton"></div><div style="height:36px;width:50%;margin-bottom:20px;" class="skeleton"></div><div style="height:40px;" class="skeleton"></div></div></div>
+      <div class="deal-card loading"><div class="deal-img-placeholder skeleton"></div><div class="deal-body"><div style="height:14px;width:40%;margin-bottom:10px;" class="skeleton"></div><div style="height:18px;width:80%;margin-bottom:10px;" class="skeleton"></div><div style="height:12px;width:100%;margin-bottom:6px;" class="skeleton"></div><div style="height:12px;width:90%;margin-bottom:20px;" class="skeleton"></div><div style="height:36px;width:50%;margin-bottom:20px;" class="skeleton"></div><div style="height:40px;" class="skeleton"></div></div></div>
+    </div>
+    <div class="disclosure" style="margin-top:32px;">⚠ Affiliate Disclosure: Links on this page are affiliate links. We may earn a commission at no extra cost to you.</div>
+  </div>
+</section>
+
+<!-- INSTAGRAM -->
+<section id="insta" class="insta-section">
+  <div class="container">
+    <div class="insta-inner">
+      <div class="insta-left">
+        <div class="section-tag">Join the Community</div>
+        <span class="insta-handle">@NagpurViralTech</span>
+        <div class="insta-title">FOLLOW FOR<br>DAILY DEALS<br>&amp; UPDATES</div>
+        <p class="insta-text">Our Instagram page is the fastest way to stay updated. Every new deal, tech review, and quality tip goes live there first. 12,000+ Nagpurians already follow us — don't miss out.</p>
+        <div class="insta-features">
+          <div class="insta-feat">Daily deal alerts — sometimes hours before they expire</div>
+          <div class="insta-feat">Honest product reviews and unboxings</div>
+          <div class="insta-feat">Exclusive offers only for our followers</div>
+          <div class="insta-feat">Local Nagpur store discounts &amp; flash sales</div>
+          <div class="insta-feat">Tech tips, comparisons &amp; buying guides</div>
+        </div>
+        <a href="https://instagram.com/nagpurviraltech" target="_blank" class="btn-primary">Follow on Instagram →</a>
+      </div>
+      <div class="insta-right">
+        <div class="insta-phone">
+          <div class="phone-notch"></div>
+          <div class="phone-feed">
+            <div class="feed-post"><div class="feed-title">🔥 DEAL ALERT</div><div class="feed-sub">boAt Rockerz 255 @ ₹799 — 73% OFF! Limited stock.</div></div>
+            <div class="feed-post"><div class="feed-title">✅ REVIEW</div><div class="feed-sub">Redmi Note 13 Pro – Honest 7-day review. Worth it?</div></div>
+            <div class="feed-post"><div class="feed-title">⚡ FLASH SALE</div><div class="feed-sub">Flipkart Big Sale live! Top picks under ₹5000.</div></div>
+            <div class="feed-post"><div class="feed-title">🏆 QUALITY PICK</div><div class="feed-sub">Best laptops for students in Nagpur under ₹40K.</div></div>
+          </div>
+          <div class="phone-bottom"><div class="phone-tag">@NAGPURVIRALTECH</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="container">
+    <div class="section-tag">The Process</div>
+    <div class="section-title">HOW IT<br>ALL WORKS</div>
+    <p class="section-sub">Transparent, simple, and honest. Here's exactly how NagpurViralTech operates.</p>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-icon">🔎</div><div class="step-title">We Research</div><p class="step-text">Our team scours Amazon, Flipkart, local stores and more daily to find genuinely good deals — not just anything with a discount badge.</p></div>
+      <div class="step"><div class="step-num">2</div><div class="step-icon">✔️</div><div class="step-title">We Verify</div><p class="step-text">Every deal is quality-checked. We look at price history, seller ratings, product reviews, and real specs before posting.</p></div>
+      <div class="step"><div class="step-num">3</div><div class="step-icon">📣</div><div class="step-title">We Share</div><p class="step-text">Verified deals go live on our website and Instagram. You get honest context — why it's good, who it's for, and what the catch is (if any).</p></div>
+      <div class="step"><div class="step-num">4</div><div class="step-icon">💰</div><div class="step-title">You Save, We Earn</div><p class="step-text">When you buy through our links, we earn a small affiliate commission. This costs you nothing extra and keeps NagpurViralTech running.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="cta-strip">
+  <h2>DON'T MISS THE<br>NEXT BIG DEAL</h2>
+  <p>Follow us on Instagram and bookmark this site. New deals every single day.</p>
+  <a href="https://instagram.com/nagpurviraltech" target="_blank" class="btn-dark">Follow @NagpurViralTech</a>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="footer-logo">Nagpur<span>Viral</span>Tech</div>
+      <p class="footer-desc">Nagpur's most trusted tech deals and quality review platform. We research so you don't have to.</p>
+      <div class="footer-social">
+        <a href="https://instagram.com/nagpurviraltech" target="_blank" class="social-btn">IG</a>
+        <a href="#" class="social-btn">YT</a>
+        <a href="#" class="social-btn">WA</a>
+        <a href="#" class="social-btn">TG</a>
+      </div>
+    </div>
+    <div class="footer-col"><h4>Explore</h4><ul><li><a href="#deals">All Deals</a></li><li><a href="#quality">Our Quality Promise</a></li><li><a href="#how">How It Works</a></li><li><a href="#insta">Instagram Page</a></li></ul></div>
+    <div class="footer-col"><h4>Categories</h4><ul><li><a href="#">Smartphones</a></li><li><a href="#">Laptops</a></li><li><a href="#">Audio</a></li><li><a href="#">Smart Home</a></li><li><a href="#">Accessories</a></li></ul></div>
+    <div class="footer-col"><h4>About</h4><ul><li><a href="#">Our Story</a></li><li><a href="#">Contact Us</a></li><li><a href="admin.html">Admin Panel</a></li><li><a href="#">Privacy Policy</a></li><li><a href="#">Affiliate Disclosure</a></li></ul></div>
+  </div>
+  <div class="footer-bottom">
+    <div class="footer-copy">© 2025 <span>NagpurViralTech</span>. Made with 🧡 for Nagpur.</div>
+    <div class="footer-copy">Affiliate links used. Prices subject to change.</div>
+  </div>
+</footer>
+
+</body>
+</html>
